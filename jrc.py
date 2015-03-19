@@ -1372,7 +1372,7 @@ class ClassGenerator(object):
         #if self.stmt.i_orig_module.keyword == "submodule":
         #    module_name = self.stmt.i_orig_module.arg
         #else:
-        module_name = get_module(self.stmt).arg
+        module_name = get_module(self.stmt).i_prefix
 
         marshell = [' ' * 4 + 'implicit object '+normalize(self.n2)+'UnMarshaller extends FromRequestUnmarshaller['+normalize(self.n2)+'] {']
         marshell.append(' ' * 4 + '  override def apply(req: HttpRequest): Deserialized['+normalize(self.n2) +
