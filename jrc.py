@@ -1005,6 +1005,11 @@ class ClassGenerator(object):
 
         if stmt.keyword in module_stmts:
             self.filename = normalize(search_one(stmt, 'prefix').arg) + 'Routes.scala'
+        elif stmt.keyword in ('rpc'):
+            if self.stmt.i_orig_module.keyword == "submodule":
+                self.filename=normalize(self.stmt.i_module.arg)+"RpcApi.scala"
+            else:
+                self.filename=normalize(self.n2)+"RpcApi.scala"
         else:
             self.filename = self.n + 'Api.scala'
 
@@ -1031,6 +1036,8 @@ class ClassGenerator(object):
             self.generate_classes()
         elif stmt.keyword not in ('notification', 'rpc'):
             self.generate_class()
+        elif stmt.keyword in ('rpc'):
+            self.generate_rpc_class()
 
     def generate_classes(self):
         """Generates a Java class hierarchy from a module statement, allowing
@@ -1065,12 +1072,19 @@ class ClassGenerator(object):
             path = self.path
             mopackage = self.mopackage
             package = self.package
-        else:
+            namespace_stmt = search_one(module, "namespace")
+            namespace = namespace_stmt.arg
+            module_name = module.arg
+            rpc_api=normalize(self.n2)
+        elif module.keyword == "submodule":
             path = self.path + "/" + camelize(module.arg)
             mopackage = self.mopackage + "." + camelize(module.arg)
             package = self.package + "." + camelize(module.arg)
-
-        self.rpc_class = None
+            main_module = get_module(self.stmt)
+            namespace_stmt = search_one(main_module, "namespace")
+            namespace = namespace_stmt.arg
+            module_name = main_module.arg
+            rpc_api=normalize(module.arg)
 
         # Generate routes class
         if self.ctx.opts.verbose:
@@ -1089,9 +1103,24 @@ class ClassGenerator(object):
         routing = [' ' * 4 + "val " + camelize(module.arg) + "RestApiRouting = compressResponseIfRequested(new RefFactoryMagnet()) {"]
 
         res = search(module, list(yangelement_stmts | {'augment'}))
-        append_rpc_impl = False
+
+        namespace_def = [' ' * 4 + "private val modelNS = \"" + namespace + "\""]
+        namespace = JavaValue(namespace_def)
+        java_class.append_access_method("namespace", namespace)
+        model_def = [' ' * 4 + "private val modelPrefix = \"" + module_name + "\""]
+        model = JavaValue(model_def)
+        java_class.append_access_method("model", model)
+        prefixmap_def = [' ' * 4 + "private val prefixs = new PrefixMap(Array(new Prefix(\"\", modelNS),new Prefix(modelPrefix, modelNS)))"]
+        prefixmap = JavaValue(prefixmap_def)
+        java_class.append_access_method("prefixmap", prefixmap)
+
+        module_prefix = normalize(search_one(self.stmt, 'prefix').arg)
+        enable_def = [' ' * 4 + module_prefix+".enable"]
+        enable_method = JavaValue(enable_def)
+        java_class.append_access_method("enable", enable_method)
+        java_class.imports.add(self.mopackage +"."+ normalize(module_prefix))
+
         if (len(res) > 0):
-            prefixGenerated = False
             # Generate classes for children of module/submodule
             for stmt in search(module, list(yangelement_stmts)):
                 # Do not generate include stmt in submodule
@@ -1101,33 +1130,13 @@ class ClassGenerator(object):
                     child_generator.generate(stmt)
 
                     if stmt.keyword == 'rpc':
-                        append_rpc_impl = True
                         routing.extend(child_generator.generate_rpc_routes(java_class, stmt))
-                        self.generate_rpc_class(stmt, package_path=package)
+                        rpcapi = [' ' * 4 + 'lazy val '+camelize(rpc_api)+'RpcApiImpl = ApiImplRegistry.getImplementation(classOf['+rpc_api+'RpcApi])']
+                        rpcapiimpl = JavaValue(rpcapi)
+                        java_class.append_access_method("apiimpl", rpcapiimpl)
                     elif stmt.keyword == 'notification':
                         routing.extend(child_generator.generate_notification_routes(java_class))
                     else:
-                        if(prefixGenerated is False):
-                            prefixGenerated = True
-                            if module.keyword == "submodule":
-                                main_module = get_module(stmt)
-                                namespace_stmt = search_one(main_module, "namespace")
-                                namespace = namespace_stmt.arg
-                                module_name = main_module.arg
-                            else:
-                                namespace_stmt = search_one(module, "namespace")
-                                namespace = namespace_stmt.arg
-                                module_name = module.arg
-                            namespace_def = [' ' * 4 + "private val modelNS = \"" + namespace + "\""]
-                            namespace = JavaValue(namespace_def)
-                            java_class.append_access_method("namespace", namespace)
-                            model_def = [' ' * 4 + "private val modelPrefix = \"" + module_name + "\""]
-                            model = JavaValue(model_def)
-                            java_class.append_access_method("model", model)
-                            prefixmap_def = [' ' * 4 + "private val prefixs = new PrefixMap(Array(new Prefix(\"\", modelNS),new Prefix(modelPrefix, modelNS)))"]
-                            prefixmap = JavaValue(prefixmap_def)
-                            java_class.append_access_method("prefixmap", prefixmap)
-
                         routing.extend(child_generator.generate_routes(java_class))
 
             routing[len(routing)-1] = ' ' * 6 + '}'
@@ -1135,30 +1144,9 @@ class ClassGenerator(object):
             res = JavaValue(routing)
             java_class.append_access_method("routing", res)
 
-            if append_rpc_impl:
-                if stmt.i_orig_module.keyword == "submodule":
-                    rpc_api=normalize(stmt.i_module.arg)
-                else:
-                    rpc_api=normalize(self.n2)
-                rpcapi = [' ' * 4 + 'lazy val '+camelize(rpc_api)+'RpcApiImpl = ApiImplRegistry.getImplementation(classOf['+rpc_api+'RpcApi])']
-                rpcapiimpl = JavaValue(rpcapi)
-                java_class.append_access_method("apiimpl", rpcapiimpl)
-
             write_file(path,
                    filename,
                    java_class.as_list(),
-                   self.ctx)
-
-            # Generate RPC API class
-            if self.rpc_class:
-                rpc_filename = normalize(module.arg) + 'RpcApi.scala'
-
-                self.rpc_class.imports.add('net.juniper.easyrest.ctx.ApiContext')
-                self.rpc_class.imports.add('scala.concurrent.{ExecutionContext, Future}')
-
-                write_file(path,
-                   rpc_filename,
-                   self.rpc_class.as_list(),
                    self.ctx)
 
     def generate_class(self):
@@ -1183,10 +1171,7 @@ class ClassGenerator(object):
                 augmented_modules[target_module.arg] = target_module
             return  # XXX: Do not generate a class for the augment statement
 
-        fields = OrderedSet()
         package_generated = False
-        all_fully_qualified = True
-        fully_qualified = False
 
         self.java_class = JavaClass(filename=self.filename,
                 package=self.package,
@@ -1262,57 +1247,48 @@ class ClassGenerator(object):
 
         self.write_to_file()
 
-    def generate_rpc_class(self, stmt, package_path):
-        fields = OrderedSet()
-        package_generated = False
-        all_fully_qualified = True
-        fully_qualified = False
+    def generate_rpc_class(self):
 
-        if stmt.i_orig_module.keyword == "submodule":
-            file_name=normalize(stmt.i_module.arg)+"RpcApi"
-        else:
-            file_name=normalize(self.n2)+"RpcApi"
-
-        package_name = get_package(stmt, self.ctx)
-
-        if (self.rpc_class is None):
-            self.rpc_class = JavaClass(filename=file_name,
-                    package=package_path,
-                    description=''.join(['This class represents rpc api']),
-                    source=self.src)
+        self.java_class = JavaClass(filename=self.filename,
+            package=self.package,
+            description=''.join(['This class represents rpc api']),
+            source=self.src)
 
         if self.ctx.opts.debug or self.ctx.opts.verbose:
-            if package_generated:
-                print('pkg ' + '.'.join([self.package, self.n2]) + ' generated')
-            if self.ctx.opts.verbose:
-                print('Generating "' + self.filename + '"...')
+            print('Generating "' + self.filename + '"...')
 
         indent =  ' ' * 4
 
-        rpc_name = camelize(stmt.arg) + "Rpc"
+        rpc_name = self.n2 + "Rpc"
 
         input_para = False
         output_para = False
-        for sub in stmt.substmts:
+        for sub in self.stmt.substmts:
             if sub.keyword == "input":
                 input_para = True
             elif sub.keyword == "output":
                 output_para = True
 
         if input_para:
-            rpc_input = "(input: " + normalize(stmt.arg) + "Input, apiCtx: ApiContext)"
-            self.rpc_class.imports.add(package_name+"."+camelize(stmt.arg)+'.'+normalize(stmt.arg)+"Input")
+            rpc_input = "(input: " + self.n + "Input, apiCtx: ApiContext)"
+            self.java_class.imports.add(self.mopackage+"."+camelize(self.stmt.arg)+'.'+normalize(self.stmt.arg)+"Input")
         else:
             rpc_input = "(apiCtx: ApiContext)"
 
         if output_para:
-            rpc_output = "Future[Seq[" + normalize(stmt.arg) + "Output"+"]]"
-            self.rpc_class.imports.add(package_name+"."+camelize(stmt.arg)+'.'+normalize(stmt.arg)+"Output")
+            rpc_output = "Future[Seq[" + self.n + "Output"+"]]"
+            self.java_class.imports.add(self.mopackage+"."+camelize(self.stmt.arg)+'.'+normalize(self.stmt.arg)+"Output")
         else:
             rpc_output = "Future[Option[Unit]]"
 
         rpc_method = JavaValue(exact=[indent + "def " + rpc_name + rpc_input + "(implicit ec: ExecutionContext): " + rpc_output])
-        self.rpc_class.add_field(rpc_method)
+        self.java_class.add_field(rpc_method)
+
+        # Generate RPC API class
+        self.java_class.imports.add('net.juniper.easyrest.ctx.ApiContext')
+        self.java_class.imports.add('scala.concurrent.{ExecutionContext, Future}')
+
+        self.write_to_file()
 
     # def generate_child(self, sub):
     #     """Appends access methods to class for children in the YANG module.
@@ -1421,7 +1397,7 @@ class ClassGenerator(object):
         body_indent = ' ' * 8
 
         exact = [indent + "get {"]
-        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+ module_name.lower()+":"+self.n2.lower()+'") {')
+        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+ module_name.lower()+":"+self.stmt.arg.lower()+'") {')
         exact.append(body_indent + '  authenticate(EasyRestAuthenticator()) { apiCtx =>')
         exact.append(body_indent + '    authorize(enforce(apiCtx)) {')
         exact.append(body_indent + "      intercept(apiCtx) {")
@@ -1437,7 +1413,7 @@ class ClassGenerator(object):
         exact.append(body_indent + "    }")
         exact.append(body_indent + "  }")
         exact.append(body_indent + "} ~")
-        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+ module_name.lower()+":"+self.n2.lower()+'" / "_total") {')
+        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+ module_name.lower()+":"+self.stmt.arg.lower()+'" / "_total") {')
         exact.append(body_indent + '  authenticate(EasyRestAuthenticator()) { apiCtx =>')
         exact.append(body_indent + '    authorize(enforce(apiCtx)) {')
         exact.append(body_indent + "      intercept(apiCtx) {")
@@ -1453,7 +1429,7 @@ class ClassGenerator(object):
         exact.append(body_indent + "    }")
         exact.append(body_indent + "  }")
         exact.append(body_indent + "} ~")
-        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+ module_name.lower() + ":" + self.n2.lower() + '=" ~ Rest) {')
+        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+ module_name.lower() + ":" + self.stmt.arg.lower() + '=" ~ Rest) {')
         exact.append(body_indent + '  (' + key_arg+ ') =>')
         exact.append(body_indent + '    authenticate(EasyRestAuthenticator()) { apiCtx =>')
         exact.append(body_indent + '      authorize(enforce(apiCtx)) {')
@@ -1479,7 +1455,7 @@ class ClassGenerator(object):
         exact.append(body_indent + "}")
         exact.append(indent + "} ~")
         exact.append(indent + "post {")
-        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+ module_name.lower() + ":"+self.n2.lower()+'") {')
+        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+ module_name.lower() + ":"+self.stmt.arg.lower()+'") {')
         exact.append(body_indent + '  authenticate(EasyRestAuthenticator()) { apiCtx =>')
         exact.append(body_indent + '    authorize(enforce(apiCtx)) {')
         exact.append(body_indent + "      intercept(apiCtx) {")
@@ -1499,7 +1475,7 @@ class ClassGenerator(object):
         exact.append(body_indent + "}")
         exact.append(indent + "} ~")
         exact.append(indent + "put {")
-        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+ module_name.lower() + ":"+self.n2.lower()+'") {')
+        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+ module_name.lower() + ":"+self.stmt.arg.lower()+'") {')
         exact.append(body_indent + '  authenticate(EasyRestAuthenticator()) { apiCtx =>')
         exact.append(body_indent + '    authorize(enforce(apiCtx)) {')
         exact.append(body_indent + "      intercept(apiCtx) {")
@@ -1526,7 +1502,7 @@ class ClassGenerator(object):
         exact.append(body_indent + "}")
         exact.append(indent + "} ~")
         exact.append(indent + "delete {")
-        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+ module_name.lower() + ":"+self.n2.lower()+'=" ~ Rest) {')
+        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+ module_name.lower() + ":"+self.stmt.arg.lower()+'=" ~ Rest) {')
         exact.append(body_indent + '  (' + key_arg+ ') =>')
         exact.append(body_indent + '    authenticate(EasyRestAuthenticator()) { apiCtx =>')
         exact.append(body_indent + '      authorize(enforce(apiCtx)) {')
@@ -1610,7 +1586,7 @@ class ClassGenerator(object):
         body_indent = ' ' * 8
 
         exact = [indent + "post {"]
-        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+module_name.lower()+':rpc" / "'+self.n2.lower()+'") {')
+        exact.append(body_indent + 'path(ROUTING_PREFIX / ROUTING_DATA_PREFIX / "'+get_module(self.stmt).arg.lower()+':rpc" / "'+self.stmt.arg.lower()+'") {')
         exact.append(body_indent + '  authenticate(EasyRestAuthenticator()) { apiCtx =>')
         exact.append(body_indent + '    authorize(enforce(apiCtx)) {')
         exact.append(body_indent + "      intercept(apiCtx) {")
