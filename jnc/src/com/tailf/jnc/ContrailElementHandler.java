@@ -2,47 +2,46 @@ package com.tailf.jnc;
 
 import org.xml.sax.Attributes;
 import org.xml.sax.SAXException;
-import org.xml.sax.helpers.DefaultHandler;
 
-/**
- * A SAX parser, for parsing for example NETCONF messages,
- * into a simple {@link Element Element} tree.
- * <p>
- * This parser is data model aware and will try to construct
- * classes that are generated from the JNC pyang plugin.
- * <p>
- */
+import java.util.*;
 
-/**
- * The handler with hooks for startElement etc. The SAX parser will build up
- * the parse tree, by calling these hooks.
- */
-class ElementHandler extends DefaultHandler {
+class ContrailElementHandler extends ElementHandler {
 
-    // pointer to current element (node)
-    public Element current;
-    public Element top;
-    public PrefixMap prefixes = null;
-    public int unknownLevel = 0;
+    private Map<String, Tagpath> library = new HashMap<String, Tagpath>();
 
-    protected boolean leaf = false;
-    protected String leafNs;
-    protected String leafName;
-    public String leafValue;
+    public ContrailElementHandler(String namespace) {
+        initializeLibrary(namespace);
+    }
+
+    private void initializeLibrary (String namespace) {
+        Set<Tagpath> tagpaths = SchemaTree.getHashMap(namespace).keySet();
+        Iterator ite = tagpaths.iterator();
+        while(ite.hasNext()){
+            Tagpath tagpath = (Tagpath)ite.next();
+            String tmp = null;
+            if (tagpath.toString().indexOf("/") == -1) {
+                tmp= tagpath.toString();
+            } else {
+                tmp= tagpath.toString().replaceAll("/", "_");
+                tmp= tmp.toString().replaceAll("-", "_");
+            }
+            this.library.put(tmp,tagpath);
+        }
+    }
 
     @Override
     public void startElement(String uri, String localName, String qName,
-            Attributes attributes) throws SAXException {
-
+                             Attributes attributes) throws SAXException {
+        String convertName = elenmentConverter(localName);
         if (unknownLevel > 0) {
-            unkownStartElement(uri, localName, attributes);
+            unkownStartElement(uri, convertName, attributes);
             return;
         }
         final Element parent = current;
         Element child;
 
         try {
-            child = YangElement.createInstance(this, parent, uri, localName);
+            child = YangElement.createInstance(this, parent, uri, convertName);
         } catch (final JNCException e) {
             e.printStackTrace();
             throw new SAXException(e.toString());
@@ -54,7 +53,7 @@ class ElementHandler extends DefaultHandler {
 
         if (child == null && unknownLevel == 1) {
             // we're entering XML data that's not in the schema
-            unkownStartElement(uri, localName, attributes);
+            unkownStartElement(uri, convertName, attributes);
             return;
         }
 
@@ -63,7 +62,7 @@ class ElementHandler extends DefaultHandler {
             // it'll be handled in the endElement method
             leaf = true;
             leafNs = uri;
-            leafName = localName;
+            leafName = convertName;
             leafValue = "";
             return;
         }
@@ -74,7 +73,8 @@ class ElementHandler extends DefaultHandler {
     }
 
     private void unkownStartElement(String uri, String localName, Attributes attributes) throws SAXException {
-        final Element child = new Element(uri, localName);
+        String convertName = elenmentConverter(localName);
+        final Element child = new Element(uri, convertName);
         child.prefixes = prefixes;
         prefixes = null;
         addOtherAttributes(attributes, child);
@@ -120,7 +120,7 @@ class ElementHandler extends DefaultHandler {
             // If it's a Leaf - we need to set value properly using
             // the setLeafValue method which will check restrictions
             try {
-            ((YangElement) current).setLeafValue(leafNs, leafName, leafValue);
+                ((YangElement) current).setLeafValue(leafNs, leafName, leafValue);
             } catch (final JNCException e) {
                 e.printStackTrace();
                 throw new SAXException(e.toString());
@@ -171,5 +171,17 @@ class ElementHandler extends DefaultHandler {
             prefixes = new PrefixMap();
         }
         prefixes.add(new Prefix(prefix, uri));
+    }
+
+    public String elenmentConverter(String localName)  throws SAXException {
+        String key = null;
+        if (library.containsKey(localName)) {
+            String tagpath = library.get(localName).toString();
+            key = tagpath.substring(tagpath.lastIndexOf("/")+1);
+        }
+        if (key == null) {
+            throw new SAXException ("can't find the tagpath");
+        }
+        return key;
     }
 }
