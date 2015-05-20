@@ -24,10 +24,10 @@ class ElementHandler extends DefaultHandler {
     public Element top;
     public PrefixMap prefixes = null;
     public int unknownLevel = 0;
-
-    protected boolean leaf = false;
-    protected String leafNs;
-    protected String leafName;
+    
+    private boolean leaf = false;
+    private String leafNs;
+    private String leafName;
     public String leafValue;
 
     @Override
