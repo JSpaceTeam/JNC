@@ -17,14 +17,9 @@ import java.io.InputStream;
  *
  */
 public class YangJsonParser {
-    private ElementHandler elementHandler = null;
-    public YangJsonParser (){
-        elementHandler = new ElementHandler();
-    }
 
-    public YangJsonParser(ElementHandler handler){
-        elementHandler = handler;
-    }
+
+    private final ElementHandler elementHandler = new ElementHandler();
 
     private final Attributes attr  = new AttributesImpl();
     /**
