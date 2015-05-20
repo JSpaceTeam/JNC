@@ -966,7 +966,7 @@ class SchemaNode(object):
         """Append "yang_node_type" and "yang_type" for schema node"""
         res.append('<yang_node_type>' + stmt.keyword + '</yang_node_type>')
 
-        if (stmt.keyword in leaf_stmts):
+        if stmt.keyword in leaf_stmts:
             typename = get_typename(stmt)
             type = search_one(stmt, 'type')
             jnc, primitive = get_types(type, self.ctx)
@@ -979,6 +979,20 @@ class SchemaNode(object):
             res.append('<yang_graph_type>2</yang_graph_type>')
         else:
             res.append('<yang_graph_type>0</yang_graph_type>')
+
+        if hasattr(stmt, 'i_orig_module') and stmt.i_orig_module:
+            if stmt.i_orig_module.arg == "csp-common":
+                res.append('<mapping_path>'+stmt.arg+'</mapping_path>')
+            else:
+                parent = get_parent(stmt)
+                if parent.keyword != "module":
+                    if search_one(parent, ('csp-common', 'has-edge')) or search_one(parent, ('csp-common', 'ref-edge')):
+                        map_name = stmt.arg
+                    else:
+                        map_name = parent.arg + "-" +stmt.arg
+                else:
+                    map_name = stmt.arg
+                res.append('<mapping_path>'+map_name+'</mapping_path>')
 
         if stmt.keyword in {'container', 'list'}:
             if hasattr(stmt, 'i_uses'):
@@ -1384,7 +1398,7 @@ class ClassGenerator(object):
             if ch.arg in ("input", "output") and len(ch.i_children) == 0:
                 continue
             field = self.generate_child(ch)
-            ch_arg = normalize(ch.arg)
+            ch_arg = normalize(ch.arg.replace("_", "-"))
             if field is not None:
                 package_generated = True
                 if ch_arg == self.n and not fully_qualified:
@@ -1489,7 +1503,7 @@ class ClassGenerator(object):
 
             child_gen = MethodGenerator(sub, self.ctx)
             if sub.keyword in ('container', 'notification'):
-                field = sub.arg
+                field = sub.arg.replace("_", "-")
                 self.java_class.add_field(child_gen.child_field())
             else:
                 field = ''
@@ -1763,8 +1777,8 @@ class JavaClass(object):
             prevpkg = ''
             for import_ in self.imports.as_sorted_list():
                 pkg, _, cls = import_.rpartition('.')
-                if cls == "Id_perms":
-                    cls = normalize(cls.replace("_", "-"))
+                #if cls == "Id_perms":
+                #    cls = normalize(cls.replace("_", "-"))
                 if (cls != self.filename.split('.')[0]
                         and (pkg != 'com.tailf.jnc' or cls in com_tailf_jnc
                             or cls == '*')):
@@ -2348,11 +2362,11 @@ class MethodGenerator(object):
         cond = ''
         for field in fields:  # could do reversed(fields) to preserve order
             add_child.add_line(''.join([cond, 'if (child instanceof ',
-                    normalize(field.replace("_", "-")), ') ', camelize(field.replace("_","-")), ' = (',
-                    normalize(field.replace("_","-")), ')child;']))
+                    normalize(field), ') ', camelize(field), ' = (',
+                    normalize(field), ')child;']))
             field_stmt = get_dependency_stmt(self.stmt, field)
             if field_stmt and not hasattr(field_stmt, 'i_uses') and field_stmt.keyword != "container":
-                add_child.add_dependency(normalize(field.replace("_","-")))
+                add_child.add_dependency(normalize(field))
             cond = 'else '
         return self.fix_imports(add_child)
 
